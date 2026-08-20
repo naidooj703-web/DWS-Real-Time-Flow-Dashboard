@@ -15,6 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # ============================================================
 # AUTOMATIC REFRESH
 # ============================================================
@@ -25,6 +26,7 @@ st_autorefresh(
     interval=REFRESH_INTERVAL_MINUTES * 60 * 1000,
     key="dws_dashboard_refresh"
 )
+
 
 # ============================================================
 # MONITORED STATIONS
@@ -127,19 +129,14 @@ def load_station_data():
     )
 
     if not response.data:
-
         return {}
-
 
     all_data = pd.DataFrame(
         response.data
     )
 
-
     if all_data.empty:
-
         return {}
-
 
     # --------------------------------------------------------
     # CLEAN FIELDS
@@ -152,44 +149,36 @@ def load_station_data():
         .str.upper()
     )
 
-
     all_data["observation_time"] = pd.to_datetime(
         all_data["observation_time"],
         errors="coerce"
     )
-
 
     all_data["flow_m3s"] = pd.to_numeric(
         all_data["flow_m3s"],
         errors="coerce"
     )
 
-
     all_data["stage_m"] = pd.to_numeric(
         all_data["stage_m"],
         errors="coerce"
     )
-
 
     all_data["latitude"] = pd.to_numeric(
         all_data["latitude"],
         errors="coerce"
     )
 
-
     all_data["longitude"] = pd.to_numeric(
         all_data["longitude"],
         errors="coerce"
     )
 
-
     all_data = all_data.dropna(
         subset=["observation_time"]
     )
 
-
     station_data = {}
-
 
     # --------------------------------------------------------
     # SPLIT INTO STATIONS
@@ -201,16 +190,12 @@ def load_station_data():
             all_data["station_code"] == code
         ].copy()
 
-
         if df.empty:
-
             continue
-
 
         df = df.sort_values(
             "observation_time"
         )
-
 
         df = df.rename(
             columns={
@@ -219,11 +204,9 @@ def load_station_data():
             }
         )
 
-
         station_data[code] = df.reset_index(
             drop=True
         )
-
 
     return station_data
 
@@ -264,18 +247,18 @@ with col3:
 
         df = station_data[code]
 
-        if not df.empty:
+        if df.empty:
+            continue
 
-            latest = df.iloc[-1]
+        latest = df.iloc[-1]
 
-            if (
-                pd.notna(latest["latitude"])
-                and
-                pd.notna(latest["longitude"])
-            ):
+        if (
+            pd.notna(latest["latitude"])
+            and
+            pd.notna(latest["longitude"])
+        ):
 
-                mapped_count += 1
-
+            mapped_count += 1
 
     st.metric(
         "Stations Mapped",
@@ -301,45 +284,31 @@ map_records = []
 for code in MONITORED_STATIONS:
 
     if code not in station_data:
-
         continue
-
 
     df = station_data[code]
 
-
     if df.empty:
-
         continue
-
 
     latest = df.iloc[-1]
 
-
-    # --------------------------------------------------------
-    # REQUIRE COORDINATES
-    # --------------------------------------------------------
-
     latitude = latest["latitude"]
-
     longitude = latest["longitude"]
 
-
-    if pd.isna(latitude) or pd.isna(longitude):
-
+    if pd.isna(latitude):
         continue
 
+    if pd.isna(longitude):
+        continue
 
     station_name = latest.get(
         "station_name",
         code
     )
 
-
     if pd.isna(station_name):
-
         station_name = code
-
 
     map_records.append({
 
@@ -362,7 +331,11 @@ for code in MONITORED_STATIONS:
             latest["stage_m"],
 
         "Date/time":
-            latest["datetime"]
+            latest["datetime"],
+
+        # Marker size
+        "Marker Size":
+            8
 
     })
 
@@ -393,6 +366,8 @@ if not map_df.empty:
 
         lon="Longitude",
 
+        size="Marker Size",
+
         hover_name="Station",
 
         text="Station",
@@ -415,7 +390,10 @@ if not map_df.empty:
                 ":.5f",
 
             "Longitude":
-                ":.5f"
+                ":.5f",
+
+            "Marker Size":
+                False
 
         },
 
@@ -439,9 +417,31 @@ if not map_df.empty:
     )
 
 
+    # --------------------------------------------------------
+    # STATION LABELS
+    # --------------------------------------------------------
+
+    fig_map.update_traces(
+
+    marker=dict(
+        size=7
+    ),
+
+    textposition="top center",
+
+    textfont=dict(
+        size=11
+    )
+
+)
+
+
     st.plotly_chart(
+
         fig_map,
+
         use_container_width=True
+
     )
 
 
@@ -475,8 +475,13 @@ if not station_data:
 
 
 selected_station = st.selectbox(
+
     "Select station",
-    sorted(station_data.keys())
+
+    sorted(
+        station_data.keys()
+    )
+
 )
 
 
@@ -499,7 +504,6 @@ station_name = latest.get(
 
 
 if pd.isna(station_name):
-
     station_name = selected_station
 
 
@@ -560,12 +564,15 @@ with col2:
 with col3:
 
     st.metric(
+
         "Observation",
+
         latest[
             "datetime"
         ].strftime(
             "%Y-%m-%d %H:%M"
         )
+
     )
 
 
@@ -597,6 +604,7 @@ fig_flow = px.line(
             "Flow (m³/s)"
 
     }
+
 )
 
 
@@ -610,8 +618,11 @@ fig_flow.update_layout(
 
 
 st.plotly_chart(
+
     fig_flow,
+
     use_container_width=True
+
 )
 
 
@@ -643,6 +654,7 @@ fig_stage = px.line(
             "Stage (m)"
 
     }
+
 )
 
 
@@ -656,8 +668,11 @@ fig_stage.update_layout(
 
 
 st.plotly_chart(
+
     fig_stage,
+
     use_container_width=True
+
 )
 
 
@@ -673,16 +688,24 @@ st.subheader(
 
 
 display_df = df.sort_values(
+
     "datetime",
+
     ascending=False
+
 ).copy()
 
 
 display_df["datetime"] = (
-    display_df["datetime"]
+
+    display_df[
+        "datetime"
+    ]
+
     .dt.strftime(
         "%Y-%m-%d %H:%M"
     )
+
 )
 
 
@@ -714,6 +737,7 @@ st.dataframe(
     use_container_width=True,
 
     height=400
+
 )
 
 
@@ -724,6 +748,8 @@ st.dataframe(
 st.divider()
 
 st.caption(
+
     "Source: DWS Unaudited Real-Time Hydrological Data. "
     "Data are subject to verification."
+
 )
