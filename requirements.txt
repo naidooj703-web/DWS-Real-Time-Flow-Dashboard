@@ -2,3 +2,4 @@ streamlit==1.61.1
 pandas
 plotly
 supabase
+streamlit-autorefresh
