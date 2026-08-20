@@ -99,119 +99,278 @@ st.caption(
 
 
 # ============================================================
-# LOAD LIVE DATA
+# LOAD ALL DATA FOR ONE STATION USING PAGINATION
+# ============================================================
+
+def load_one_station(station_code):
+
+    page_size = 1000
+
+    start = 0
+
+    all_records = []
+
+
+    while True:
+
+        try:
+
+            response = (
+
+                supabase
+
+                .table("station_observations")
+
+                .select(
+                    "station_code,"
+                    "observation_time,"
+                    "flow_m3s,"
+                    "stage_m,"
+                    "latitude,"
+                    "longitude,"
+                    "station_name"
+                )
+
+                .eq(
+                    "station_code",
+                    station_code
+                )
+
+                .order(
+                    "observation_time",
+                    desc=False
+                )
+
+                .range(
+                    start,
+                    start + page_size - 1
+                )
+
+                .execute()
+
+            )
+
+        except Exception as e:
+
+            return None, str(e)
+
+
+        records = response.data or []
+
+
+        if not records:
+
+            break
+
+
+        all_records.extend(
+            records
+        )
+
+
+        # ----------------------------------------------------
+        # If fewer than page_size were returned, this is the
+        # final page.
+        # ----------------------------------------------------
+
+        if len(records) < page_size:
+
+            break
+
+
+        start += page_size
+
+
+    if not all_records:
+
+        return None, "No records returned"
+
+
+    df = pd.DataFrame(
+        all_records
+    )
+
+
+    if df.empty:
+
+        return None, "Empty response"
+
+
+    # ========================================================
+    # NORMALISE STATION CODE
+    # ========================================================
+
+    df["station_code"] = (
+
+        df["station_code"]
+
+        .astype("string")
+
+        .str.strip()
+
+        .str.upper()
+
+    )
+
+
+    # ========================================================
+    # NORMALISE DATETIME
+    # ========================================================
+
+    df["observation_time"] = pd.to_datetime(
+
+        df["observation_time"],
+
+        errors="coerce",
+
+        utc=True
+
+    )
+
+
+    # ========================================================
+    # NORMALISE NUMERIC FIELDS
+    # ========================================================
+
+    for column in [
+
+        "flow_m3s",
+        "stage_m",
+        "latitude",
+        "longitude"
+
+    ]:
+
+        df[column] = pd.to_numeric(
+
+            df[column],
+
+            errors="coerce"
+
+        )
+
+
+    # ========================================================
+    # REMOVE INVALID TIMESTAMPS
+    # ========================================================
+
+    df = df.dropna(
+
+        subset=[
+            "observation_time"
+        ]
+
+    )
+
+
+    if df.empty:
+
+        return None, "No valid timestamps"
+
+
+    # ========================================================
+    # RENAME DATETIME
+    # ========================================================
+
+    df = df.rename(
+
+        columns={
+
+            "observation_time":
+                "datetime"
+
+        }
+
+    )
+
+
+    # ========================================================
+    # SORT CHRONOLOGICALLY
+    # ========================================================
+
+    df = df.sort_values(
+
+        "datetime",
+
+        ascending=True
+
+    )
+
+
+    # ========================================================
+    # REMOVE DUPLICATE OBSERVATIONS
+    #
+    # Keep this only if the same timestamp occurs more than
+    # once for a station.
+    # ========================================================
+
+    df = df.drop_duplicates(
+
+        subset=[
+            "station_code",
+            "datetime"
+        ],
+
+        keep="last"
+
+    )
+
+
+    return (
+
+        df.reset_index(
+            drop=True
+        ),
+
+        None
+
+    )
+
+
+# ============================================================
+# LOAD ALL STATIONS
 # ============================================================
 
 @st.cache_data(ttl=60)
 def load_station_data():
 
-    response = (
-        supabase
-        .table("station_observations")
-        .select(
-            "station_code,"
-            "observation_time,"
-            "flow_m3s,"
-            "stage_m,"
-            "latitude,"
-            "longitude,"
-            "station_name"
-        )
-        .in_(
-            "station_code",
-            MONITORED_STATIONS
-        )
-        .order(
-            "observation_time",
-            desc=False
-        )
-        .execute()
-    )
-
-    if not response.data:
-        return {}
-
-    all_data = pd.DataFrame(
-        response.data
-    )
-
-    if all_data.empty:
-        return {}
-
-    # --------------------------------------------------------
-    # CLEAN FIELDS
-    # --------------------------------------------------------
-
-    all_data["station_code"] = (
-        all_data["station_code"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
-    all_data["observation_time"] = pd.to_datetime(
-        all_data["observation_time"],
-        errors="coerce"
-    )
-
-    all_data["flow_m3s"] = pd.to_numeric(
-        all_data["flow_m3s"],
-        errors="coerce"
-    )
-
-    all_data["stage_m"] = pd.to_numeric(
-        all_data["stage_m"],
-        errors="coerce"
-    )
-
-    all_data["latitude"] = pd.to_numeric(
-        all_data["latitude"],
-        errors="coerce"
-    )
-
-    all_data["longitude"] = pd.to_numeric(
-        all_data["longitude"],
-        errors="coerce"
-    )
-
-    all_data = all_data.dropna(
-        subset=["observation_time"]
-    )
-
     station_data = {}
 
-    # --------------------------------------------------------
-    # SPLIT INTO STATIONS
-    # --------------------------------------------------------
+    station_errors = {}
 
-    for code in MONITORED_STATIONS:
 
-        df = all_data[
-            all_data["station_code"] == code
-        ].copy()
+    for station_code in MONITORED_STATIONS:
 
-        if df.empty:
+        df, error = load_one_station(
+            station_code
+        )
+
+
+        if error is not None:
+
+            station_errors[
+                station_code
+            ] = error
+
             continue
 
-        df = df.sort_values(
-            "observation_time"
-        )
 
-        df = df.rename(
-            columns={
-                "observation_time":
-                    "datetime"
-            }
-        )
+        if df is not None and not df.empty:
 
-        station_data[code] = df.reset_index(
-            drop=True
-        )
-
-    return station_data
+            station_data[
+                station_code
+            ] = df
 
 
-station_data = load_station_data()
+    return (
+        station_data,
+        station_errors
+    )
+
+
+station_data, station_errors = (
+    load_station_data()
+)
 
 
 # ============================================================
@@ -243,22 +402,28 @@ with col3:
 
     mapped_count = 0
 
-    for code in station_data:
 
-        df = station_data[code]
+    for station_code in station_data:
 
-        if df.empty:
-            continue
+        df = station_data[
+            station_code
+        ]
 
-        latest = df.iloc[-1]
 
-        if (
-            pd.notna(latest["latitude"])
-            and
-            pd.notna(latest["longitude"])
-        ):
+        coordinate_records = df.dropna(
+
+            subset=[
+                "latitude",
+                "longitude"
+            ]
+
+        )
+
+
+        if not coordinate_records.empty:
 
             mapped_count += 1
+
 
     st.metric(
         "Stations Mapped",
@@ -269,51 +434,122 @@ with col3:
 with col4:
 
     st.metric(
-        "History",
-        "30 days"
+        "Refresh",
+        "5 min"
     )
 
 
 # ============================================================
-# CREATE MAP DATA
+# MISSING STATIONS
+# ============================================================
+
+missing_stations = [
+
+    code
+
+    for code in MONITORED_STATIONS
+
+    if code not in station_data
+
+]
+
+
+if missing_stations:
+
+    st.warning(
+
+        "Stations with no usable data: "
+        + ", ".join(missing_stations)
+
+    )
+
+
+# ============================================================
+# MAP DATA
 # ============================================================
 
 map_records = []
 
 
-for code in MONITORED_STATIONS:
+for station_code in MONITORED_STATIONS:
 
-    if code not in station_data:
+    if station_code not in station_data:
+
         continue
 
-    df = station_data[code]
+
+    df = station_data[
+        station_code
+    ]
+
 
     if df.empty:
+
         continue
+
+
+    # Latest observation
 
     latest = df.iloc[-1]
 
-    latitude = latest["latitude"]
-    longitude = latest["longitude"]
 
-    if pd.isna(latitude):
-        continue
+    # Latest available coordinates
 
-    if pd.isna(longitude):
-        continue
+    coordinate_records = df.dropna(
 
-    station_name = latest.get(
-        "station_name",
-        code
+        subset=[
+            "latitude",
+            "longitude"
+        ]
+
     )
 
+
+    if coordinate_records.empty:
+
+        continue
+
+
+    coordinate_record = (
+        coordinate_records.iloc[-1]
+    )
+
+
+    latitude = coordinate_record[
+        "latitude"
+    ]
+
+
+    longitude = coordinate_record[
+        "longitude"
+    ]
+
+
+    if pd.isna(latitude) or pd.isna(longitude):
+
+        continue
+
+
+    # Station name
+
+    station_name = latest.get(
+
+        "station_name",
+
+        station_code
+
+    )
+
+
     if pd.isna(station_name):
-        station_name = code
+
+        station_name = station_code
+
 
     map_records.append({
 
         "Station":
-            code,
+            station_code,
 
         "Station Name":
             station_name,
@@ -331,11 +567,7 @@ for code in MONITORED_STATIONS:
             latest["stage_m"],
 
         "Date/time":
-            latest["datetime"],
-
-        # Marker size
-        "Marker Size":
-            8
+            latest["datetime"]
 
     })
 
@@ -366,8 +598,6 @@ if not map_df.empty:
 
         lon="Longitude",
 
-        size="Marker Size",
-
         hover_name="Station",
 
         text="Station",
@@ -390,16 +620,14 @@ if not map_df.empty:
                 ":.5f",
 
             "Longitude":
-                ":.5f",
-
-            "Marker Size":
-                False
+                ":.5f"
 
         },
 
         zoom=5,
 
         height=650
+
     )
 
 
@@ -408,32 +636,35 @@ if not map_df.empty:
         map_style="carto-positron",
 
         margin={
+
             "l": 0,
+
             "r": 0,
+
             "t": 0,
+
             "b": 0
+
         }
 
     )
 
 
-    # --------------------------------------------------------
-    # STATION LABELS
-    # --------------------------------------------------------
+    # Smaller station dots
 
     fig_map.update_traces(
 
-    marker=dict(
-        size=7
-    ),
+        marker=dict(
+            size=7
+        ),
 
-    textposition="top center",
+        textposition="top center",
 
-    textfont=dict(
-        size=11
+        textfont=dict(
+            size=11
+        )
+
     )
-
-)
 
 
     st.plotly_chart(
@@ -448,8 +679,7 @@ if not map_df.empty:
 else:
 
     st.warning(
-        "No station coordinates are available "
-        "for the live station data."
+        "No station coordinates are available."
     )
 
 
@@ -467,8 +697,7 @@ st.subheader(
 if not station_data:
 
     st.error(
-        "No DWS real-time station data found "
-        "in the online database."
+        "No DWS real-time station data found."
     )
 
     st.stop()
@@ -490,20 +719,32 @@ df = station_data[
 ].copy()
 
 
+# Make absolutely sure graph data are chronological
+
+df = df.sort_values(
+    "datetime",
+    ascending=True
+)
+
+
 # ============================================================
-# STATION NAME
+# LATEST OBSERVATION
 # ============================================================
 
 latest = df.iloc[-1]
 
 
 station_name = latest.get(
+
     "station_name",
+
     selected_station
+
 )
 
 
 if pd.isna(station_name):
+
     station_name = selected_station
 
 
@@ -517,7 +758,7 @@ st.caption(
 
 
 # ============================================================
-# LATEST OBSERVATION
+# LATEST METRICS
 # ============================================================
 
 col1, col2, col3 = st.columns(3)
@@ -527,11 +768,15 @@ with col1:
 
     flow = latest["flow_m3s"]
 
+
     if pd.notna(flow):
 
         st.metric(
+
             "Latest Flow",
+
             f"{flow:.3f} m³/s"
+
         )
 
     else:
@@ -546,11 +791,15 @@ with col2:
 
     stage = latest["stage_m"]
 
+
     if pd.notna(stage):
 
         st.metric(
+
             "Latest Stage",
+
             f"{stage:.3f} m"
+
         )
 
     else:
@@ -563,16 +812,123 @@ with col2:
 
 with col3:
 
+    observation_time = latest["datetime"]
+
+
     st.metric(
 
         "Observation",
 
-        latest[
-            "datetime"
-        ].strftime(
+        observation_time.strftime(
             "%Y-%m-%d %H:%M"
         )
 
+    )
+
+
+# ============================================================
+# PERIOD SELECTOR
+# ============================================================
+
+st.divider()
+
+st.subheader(
+    "📅 Analysis Period"
+)
+
+
+period_options = {
+
+    "24 Hours":
+        pd.Timedelta(hours=24),
+
+    "7 Days":
+        pd.Timedelta(days=7),
+
+    "30 Days":
+        pd.Timedelta(days=30)
+
+}
+
+
+selected_period = st.selectbox(
+
+    "Select period",
+
+    list(
+        period_options.keys()
+    ),
+
+    index=2
+
+)
+
+
+# ============================================================
+# FILTER PERIOD
+# ============================================================
+
+latest_datetime = df[
+    "datetime"
+].max()
+
+
+start_datetime = (
+
+    latest_datetime
+
+    - period_options[
+        selected_period
+    ]
+
+)
+
+
+period_df = df[
+
+    df["datetime"] >= start_datetime
+
+].copy()
+
+
+# ============================================================
+# X-AXIS SETTINGS
+# ============================================================
+
+if selected_period == "24 Hours":
+
+    tick_format = "%H:%M"
+
+    dtick_value = (
+        3 *
+        60 *
+        60 *
+        1000
+    )
+
+
+elif selected_period == "7 Days":
+
+    tick_format = "%d %b"
+
+    dtick_value = (
+        24 *
+        60 *
+        60 *
+        1000
+    )
+
+
+else:
+
+    tick_format = "%d %b"
+
+    dtick_value = (
+        5 *
+        24 *
+        60 *
+        60 *
+        1000
     )
 
 
@@ -583,47 +939,66 @@ with col3:
 st.divider()
 
 st.subheader(
-    "🌊 Flow — Last 30 Days"
+    f"🌊 Flow — Last {selected_period}"
 )
 
 
-fig_flow = px.line(
+if not period_df.empty:
 
-    df,
+    fig_flow = px.line(
 
-    x="datetime",
+        period_df,
 
-    y="flow_m3s",
+        x="datetime",
 
-    labels={
+        y="flow_m3s",
 
-        "datetime":
-            "Date / Time",
+        labels={
 
-        "flow_m3s":
-            "Flow (m³/s)"
+            "datetime":
+                "Date / Time",
 
-    }
+            "flow_m3s":
+                "Flow (m³/s)"
 
-)
+        }
 
-
-fig_flow.update_layout(
-
-    height=450,
-
-    hovermode="x unified"
-
-)
+    )
 
 
-st.plotly_chart(
+    fig_flow.update_layout(
 
-    fig_flow,
+        height=450,
 
-    use_container_width=True
+        hovermode="x unified",
 
-)
+        xaxis=dict(
+
+            title="Date / Time",
+
+            tickformat=tick_format,
+
+            dtick=dtick_value
+
+        )
+
+    )
+
+
+    st.plotly_chart(
+
+        fig_flow,
+
+        use_container_width=True
+
+    )
+
+
+else:
+
+    st.warning(
+        "No observations available."
+    )
 
 
 # ============================================================
@@ -633,47 +1008,159 @@ st.plotly_chart(
 st.divider()
 
 st.subheader(
-    "📏 Stage — Last 30 Days"
+    f"📏 Stage — Last {selected_period}"
 )
 
 
-fig_stage = px.line(
+if not period_df.empty:
 
-    df,
+    fig_stage = px.line(
 
-    x="datetime",
+        period_df,
 
-    y="stage_m",
+        x="datetime",
 
-    labels={
+        y="stage_m",
 
-        "datetime":
-            "Date / Time",
+        labels={
 
-        "stage_m":
-            "Stage (m)"
+            "datetime":
+                "Date / Time",
 
-    }
+            "stage_m":
+                "Stage (m)"
 
+        }
+
+    )
+
+
+    fig_stage.update_layout(
+
+        height=450,
+
+        hovermode="x unified",
+
+        xaxis=dict(
+
+            title="Date / Time",
+
+            tickformat=tick_format,
+
+            dtick=dtick_value
+
+        )
+
+    )
+
+
+    st.plotly_chart(
+
+        fig_stage,
+
+        use_container_width=True
+
+    )
+
+
+else:
+
+    st.warning(
+        "No observations available."
+    )
+
+
+# ============================================================
+# PERIOD SUMMARY
+# ============================================================
+
+st.divider()
+
+st.subheader(
+    f"📊 {selected_period} Summary"
 )
 
 
-fig_stage.update_layout(
+if not period_df.empty:
 
-    height=450,
-
-    hovermode="x unified"
-
-)
+    summary_col1, summary_col2, summary_col3 = (
+        st.columns(3)
+    )
 
 
-st.plotly_chart(
+    with summary_col1:
 
-    fig_stage,
+        max_flow = period_df[
+            "flow_m3s"
+        ].max()
 
-    use_container_width=True
 
-)
+        if pd.notna(max_flow):
+
+            st.metric(
+
+                "Maximum Flow",
+
+                f"{max_flow:.3f} m³/s"
+
+            )
+
+        else:
+
+            st.metric(
+                "Maximum Flow",
+                "N/A"
+            )
+
+
+    with summary_col2:
+
+        min_flow = period_df[
+            "flow_m3s"
+        ].min()
+
+
+        if pd.notna(min_flow):
+
+            st.metric(
+
+                "Minimum Flow",
+
+                f"{min_flow:.3f} m³/s"
+
+            )
+
+        else:
+
+            st.metric(
+                "Minimum Flow",
+                "N/A"
+            )
+
+
+    with summary_col3:
+
+        mean_flow = period_df[
+            "flow_m3s"
+        ].mean()
+
+
+        if pd.notna(mean_flow):
+
+            st.metric(
+
+                "Mean Flow",
+
+                f"{mean_flow:.3f} m³/s"
+
+            )
+
+        else:
+
+            st.metric(
+                "Mean Flow",
+                "N/A"
+            )
 
 
 # ============================================================
@@ -687,7 +1174,7 @@ st.subheader(
 )
 
 
-display_df = df.sort_values(
+display_df = period_df.sort_values(
 
     "datetime",
 
@@ -712,11 +1199,13 @@ display_df["datetime"] = (
 st.dataframe(
 
     display_df[
+
         [
             "datetime",
             "stage_m",
             "flow_m3s"
         ]
+
     ].rename(
 
         columns={
