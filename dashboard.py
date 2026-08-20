@@ -1,7 +1,10 @@
+import os
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from pathlib import Path
+from supabase import create_client
 
 
 # ============================================================
@@ -21,7 +24,6 @@ st.set_page_config(
 
 DATA_FOLDER = Path("C:/DWS_Flow_Dashboard")
 
-# EXACT catalogue filename
 CATALOGUE_FILE = DATA_FOLDER / "NWRM_WQUANT_CAT.csv"
 
 
@@ -54,10 +56,43 @@ MONITORED_STATIONS = [
 
 
 # ============================================================
+# SUPABASE CONNECTION
+# ============================================================
+
+@st.cache_resource
+def get_supabase():
+
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
+
+    return create_client(
+        supabase_url,
+        supabase_key
+    )
+
+
+try:
+
+    supabase = get_supabase()
+
+except Exception as e:
+
+    st.error(
+        "Could not connect to the DWS online database."
+    )
+
+    st.code(str(e))
+
+    st.stop()
+
+
+# ============================================================
 # TITLE
 # ============================================================
 
-st.title("🌊 DWS Real-Time Flow Dashboard")
+st.title(
+    "🌊 DWS Real-Time Flow Dashboard"
+)
 
 st.caption(
     "Department of Water and Sanitation — "
@@ -83,10 +118,8 @@ def load_catalogue():
             ]
         )
 
-    try:
 
-        # The DWS catalogue does not use a normal
-        # first-row header, so read it raw.
+    try:
 
         raw = pd.read_csv(
             CATALOGUE_FILE,
@@ -116,15 +149,8 @@ def load_catalogue():
     # --------------------------------------------------------
     # DWS CATALOGUE STRUCTURE
     #
-    # 0  = primary region
-    # 1  = sub-region
-    # 2  = drainage region
-    # 3  = quaternary
-    # 4  = water management area
     # 5  = latitude
     # 6  = longitude
-    # 7  = water type
-    # 8  = province
     # 9  = station code
     # 10 = station code
     # 13 = station name
@@ -142,18 +168,19 @@ def load_catalogue():
                 row.iloc[9]
             ).strip().upper()
 
+
             code_2 = str(
                 row.iloc[10]
             ).strip().upper()
 
 
-            # Find the monitored station code
-
             station_code = None
+
 
             if code_1 in MONITORED_STATIONS:
 
                 station_code = code_1
+
 
             elif code_2 in MONITORED_STATIONS:
 
@@ -161,18 +188,15 @@ def load_catalogue():
 
 
             if station_code is None:
+
                 continue
 
-
-            # Latitude
 
             latitude = pd.to_numeric(
                 row.iloc[5],
                 errors="coerce"
             )
 
-
-            # Longitude
 
             longitude = pd.to_numeric(
                 row.iloc[6],
@@ -183,11 +207,10 @@ def load_catalogue():
             if pd.isna(latitude):
                 continue
 
+
             if pd.isna(longitude):
                 continue
 
-
-            # Station name
 
             station_name = str(
                 row.iloc[13]
@@ -196,13 +219,17 @@ def load_catalogue():
 
             records.append({
 
-                "station_code": station_code,
+                "station_code":
+                    station_code,
 
-                "latitude": float(latitude),
+                "latitude":
+                    float(latitude),
 
-                "longitude": float(longitude),
+                "longitude":
+                    float(longitude),
 
-                "station_name": station_name
+                "station_name":
+                    station_name
 
             })
 
@@ -236,7 +263,7 @@ catalogue = load_catalogue()
 
 
 # ============================================================
-# LOAD REAL-TIME STATION DATA
+# LOAD LIVE DATA FROM SUPABASE
 # ============================================================
 
 @st.cache_data(ttl=60)
@@ -245,66 +272,114 @@ def load_station_data():
     data = {}
 
 
-    for code in MONITORED_STATIONS:
+    try:
 
-        file = DATA_FOLDER / f"DWS_{code}.csv"
-
-
-        if not file.exists():
-            continue
-
-
-        try:
-
-            df = pd.read_csv(
-                file
+        response = (
+            supabase
+            .table("station_observations")
+            .select(
+                "station_code,"
+                "observation_time,"
+                "flow_m3s,"
+                "stage_m"
             )
+            .in_(
+                "station_code",
+                MONITORED_STATIONS
+            )
+            .order(
+                "observation_time",
+                desc=False
+            )
+            .execute()
+        )
+
+
+        rows = response.data
+
+
+        if not rows:
+
+            return data
+
+
+        all_data = pd.DataFrame(
+            rows
+        )
+
+
+        if all_data.empty:
+
+            return data
+
+
+        all_data["observation_time"] = pd.to_datetime(
+            all_data["observation_time"],
+            errors="coerce"
+        )
+
+
+        all_data["flow_m3s"] = pd.to_numeric(
+            all_data["flow_m3s"],
+            errors="coerce"
+        )
+
+
+        all_data["stage_m"] = pd.to_numeric(
+            all_data["stage_m"],
+            errors="coerce"
+        )
+
+
+        all_data = all_data.dropna(
+            subset=["observation_time"]
+        )
+
+
+        for code in MONITORED_STATIONS:
+
+            df = all_data[
+                all_data["station_code"] == code
+            ].copy()
 
 
             if df.empty:
-                continue
 
-
-            df["datetime"] = pd.to_datetime(
-                df["datetime"],
-                errors="coerce"
-            )
-
-
-            df["stage_m"] = pd.to_numeric(
-                df["stage_m"],
-                errors="coerce"
-            )
-
-
-            df["flow_m3s"] = pd.to_numeric(
-                df["flow_m3s"],
-                errors="coerce"
-            )
-
-
-            df = df.dropna(
-                subset=["datetime"]
-            )
-
-
-            if df.empty:
                 continue
 
 
             df = df.sort_values(
-                "datetime"
+                "observation_time"
             )
 
 
-            data[code] = df
-
-
-        except Exception as e:
-
-            st.warning(
-                f"Could not read {file.name}: {e}"
+            df = df.rename(
+                columns={
+                    "observation_time":
+                        "datetime"
+                }
             )
+
+
+            data[code] = df[
+                [
+                    "datetime",
+                    "stage_m",
+                    "flow_m3s"
+                ]
+            ].reset_index(
+                drop=True
+            )
+
+
+    except Exception as e:
+
+        st.error(
+            "Could not load station observations "
+            "from Supabase."
+        )
+
+        st.code(str(e))
 
 
     return data
@@ -318,6 +393,7 @@ station_data = load_station_data()
 # ============================================================
 
 st.divider()
+
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -342,13 +418,19 @@ with col3:
 
     mapped_count = 0
 
+
     if not catalogue.empty:
 
         mapped_count = len(
-            set(catalogue["station_code"])
+            set(
+                catalogue["station_code"]
+            )
             &
-            set(station_data.keys())
+            set(
+                station_data.keys()
+            )
         )
+
 
     st.metric(
         "Stations Mapped",
@@ -374,6 +456,7 @@ map_records = []
 for code in MONITORED_STATIONS:
 
     if code not in station_data:
+
         continue
 
 
@@ -383,41 +466,55 @@ for code in MONITORED_STATIONS:
 
 
     if coord.empty:
+
         continue
 
 
     df = station_data[code]
+
+
+    if df.empty:
+
+        continue
+
 
     latest = df.iloc[-1]
 
 
     map_records.append({
 
-        "Station": code,
+        "Station":
+            code,
 
-        "Station Name": coord.iloc[0][
-            "station_name"
-        ],
+        "Station Name":
+            coord.iloc[0][
+                "station_name"
+            ],
 
-        "Latitude": coord.iloc[0][
-            "latitude"
-        ],
+        "Latitude":
+            coord.iloc[0][
+                "latitude"
+            ],
 
-        "Longitude": coord.iloc[0][
-            "longitude"
-        ],
+        "Longitude":
+            coord.iloc[0][
+                "longitude"
+            ],
 
-        "Flow (m³/s)": latest[
-            "flow_m3s"
-        ],
+        "Flow (m³/s)":
+            latest[
+                "flow_m3s"
+            ],
 
-        "Stage (m)": latest[
-            "stage_m"
-        ],
+        "Stage (m)":
+            latest[
+                "stage_m"
+            ],
 
-        "Date/time": latest[
-            "datetime"
-        ]
+        "Date/time":
+            latest[
+                "datetime"
+            ]
 
     })
 
@@ -441,6 +538,7 @@ st.subheader(
 if not map_df.empty:
 
     fig_map = px.scatter_map(
+
         map_df,
 
         lat="Latitude",
@@ -448,22 +546,28 @@ if not map_df.empty:
         lon="Longitude",
 
         hover_name="Station",
-	
-	text="Station",
+
+        text="Station",
 
         hover_data={
 
-            "Station Name": True,
+            "Station Name":
+                True,
 
-            "Flow (m³/s)": ":.3f",
+            "Flow (m³/s)":
+                ":.3f",
 
-            "Stage (m)": ":.3f",
+            "Stage (m)":
+                ":.3f",
 
-            "Date/time": True,
+            "Date/time":
+                True,
 
-            "Latitude": ":.5f",
+            "Latitude":
+                ":.5f",
 
-            "Longitude": ":.5f"
+            "Longitude":
+                ":.5f"
 
         },
 
@@ -515,15 +619,20 @@ st.subheader(
 if not station_data:
 
     st.error(
-        "No DWS real-time station data found."
+        "No DWS real-time station data found "
+        "in the online database."
     )
 
     st.stop()
 
 
 selected_station = st.selectbox(
+
     "Select station",
-    sorted(station_data.keys())
+
+    sorted(
+        station_data.keys()
+    )
 )
 
 
@@ -537,7 +646,8 @@ df = station_data[
 # ============================================================
 
 coord = catalogue[
-    catalogue["station_code"] == selected_station
+    catalogue["station_code"] ==
+    selected_station
 ]
 
 
@@ -555,6 +665,7 @@ else:
 st.markdown(
     f"### {selected_station}"
 )
+
 
 st.caption(
     station_name
@@ -590,12 +701,15 @@ with col2:
 with col3:
 
     st.metric(
+
         "Observation",
+
         latest[
             "datetime"
         ].strftime(
             "%Y-%m-%d %H:%M"
         )
+
     )
 
 
@@ -620,9 +734,11 @@ fig_flow = px.line(
 
     labels={
 
-        "datetime": "Date / Time",
+        "datetime":
+            "Date / Time",
 
-        "flow_m3s": "Flow (m³/s)"
+        "flow_m3s":
+            "Flow (m³/s)"
 
     }
 )
@@ -638,8 +754,11 @@ fig_flow.update_layout(
 
 
 st.plotly_chart(
+
     fig_flow,
+
     use_container_width=True
+
 )
 
 
@@ -664,9 +783,11 @@ fig_stage = px.line(
 
     labels={
 
-        "datetime": "Date / Time",
+        "datetime":
+            "Date / Time",
 
-        "stage_m": "Stage (m)"
+        "stage_m":
+            "Stage (m)"
 
     }
 )
@@ -682,8 +803,11 @@ fig_stage.update_layout(
 
 
 st.plotly_chart(
+
     fig_stage,
+
     use_container_width=True
+
 )
 
 
@@ -699,16 +823,24 @@ st.subheader(
 
 
 display_df = df.sort_values(
+
     "datetime",
+
     ascending=False
+
 ).copy()
 
 
 display_df["datetime"] = (
-    display_df["datetime"]
+
+    display_df[
+        "datetime"
+    ]
+
     .dt.strftime(
         "%Y-%m-%d %H:%M"
     )
+
 )
 
 
@@ -750,7 +882,11 @@ st.dataframe(
 
 st.divider()
 
+
 st.caption(
-    "Source: DWS Unaudited Real-Time Hydrological Data. "
+
+    "Source: DWS Unaudited Real-Time "
+    "Hydrological Data. "
     "Data are subject to verification."
+
 )
