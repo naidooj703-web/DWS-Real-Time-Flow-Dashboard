@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import plotly.express as px
 from supabase import create_client
@@ -14,6 +15,16 @@ st.set_page_config(
     layout="wide"
 )
 
+# ============================================================
+# AUTOMATIC REFRESH
+# ============================================================
+
+REFRESH_INTERVAL_MINUTES = 5
+
+st_autorefresh(
+    interval=REFRESH_INTERVAL_MINUTES * 60 * 1000,
+    key="dws_dashboard_refresh"
+)
 
 # ============================================================
 # MONITORED STATIONS
