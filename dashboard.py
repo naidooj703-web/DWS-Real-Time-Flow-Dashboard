@@ -22,7 +22,7 @@ st.set_page_config(
 # SETTINGS
 # ============================================================
 
-DATA_FOLDER = Path("C:/DWS_Flow_Dashboard")
+DATA_FOLDER = Path(__file__).resolve().parent
 
 CATALOGUE_FILE = DATA_FOLDER / "NWRM_WQUANT_CAT.csv"
 
